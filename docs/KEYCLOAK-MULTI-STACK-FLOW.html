@@ -1,0 +1,456 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How Keycloak Works Across Frameworks</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --bg-alt: #f6f8fa;
+    --text: #1f2328;
+    --text-muted: #57606a;
+    --border: #d0d7de;
+    --accent: #0969da;
+    --accent-soft: #ddf4ff;
+    --code-bg: #f6f8fa;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117;
+      --bg-alt: #161b22;
+      --text: #e6edf3;
+      --text-muted: #8b949e;
+      --border: #30363d;
+      --accent: #4493f8;
+      --accent-soft: #0c2d48;
+      --code-bg: #161b22;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    line-height: 1.65;
+  }
+  .wrap {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 2.5rem 1.5rem 5rem;
+  }
+  h1 {
+    font-size: 1.9rem;
+    border-bottom: 2px solid var(--border);
+    padding-bottom: 0.6rem;
+    margin-top: 0;
+  }
+  h2 {
+    font-size: 1.4rem;
+    margin-top: 2.8rem;
+    padding-bottom: 0.4rem;
+    border-bottom: 1px solid var(--border);
+  }
+  h3 {
+    font-size: 1.15rem;
+    margin-top: 2rem;
+    color: var(--accent);
+  }
+  a { color: var(--accent); }
+  p { color: var(--text); }
+  code {
+    background: var(--code-bg);
+    padding: 0.15em 0.4em;
+    border-radius: 4px;
+    font-size: 0.88em;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem;
+    overflow-x: auto;
+  }
+  pre code { background: none; padding: 0; }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 1.2rem 0;
+    font-size: 0.92rem;
+    display: block;
+    overflow-x: auto;
+  }
+  th, td {
+    border: 1px solid var(--border);
+    padding: 0.55rem 0.8rem;
+    text-align: left;
+    vertical-align: top;
+  }
+  th {
+    background: var(--bg-alt);
+    font-weight: 600;
+  }
+  tr:nth-child(even) td { background: var(--bg-alt); }
+  blockquote {
+    border-left: 4px solid var(--accent);
+    background: var(--accent-soft);
+    margin: 1rem 0;
+    padding: 0.6rem 1rem;
+    border-radius: 0 6px 6px 0;
+  }
+  hr { border: none; border-top: 1px solid var(--border); margin: 2.5rem 0; }
+  .mermaid {
+    background: var(--bg-alt);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem;
+    margin: 1.2rem 0;
+    text-align: center;
+    overflow-x: auto;
+  }
+  .badge {
+    display: inline-block;
+    background: var(--accent-soft);
+    color: var(--accent);
+    padding: 0.2rem 0.7rem;
+    border-radius: 999px;
+    font-size: 0.82rem;
+    margin-bottom: 1.2rem;
+  }
+  #loading { color: var(--text-muted); font-style: italic; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <span class="badge">📄 General Reference — Multi Stack</span>
+  <div id="content"><p id="loading">Loading document…</p></div>
+</div>
+
+<script id="markdown-source" type="text/markdown">
+# How Keycloak Works Across Frameworks — Frontend, Backend, and Database
+
+This document is a **general-purpose reference** (not specific to the `demo-sso` demo in this project) explaining how Keycloak works when paired with various frontend, backend, and database technology choices. The goal: once you understand *one* core flow here, you can apply it to any tech stack.
+
+For the real, built-and-tested implementation in this project (Next.js + FastAPI + PostgreSQL), see `KEYCLOAK-GUIDE.md` and `README.md` in the `docs/` folder.
+
+---
+
+## 1. Core Principles That Apply to Every Stack
+
+Regardless of framework, Keycloak always acts as **one centralized Identity Provider**, and the interaction pattern is always the same:
+
+```mermaid
+flowchart TB
+    subgraph Client["1. FRONTEND (any framework)"]
+        FE["Next.js / Laravel Blade / .NET Razor / Vue.js / Flutter / HTML+JS"]
+    end
+    subgraph IdP["2. IDENTITY PROVIDER (always Keycloak)"]
+        KC["Keycloak\nRealm + Client + User"]
+    end
+    subgraph Server["3. BACKEND / API (any framework)"]
+        BE[".NET / Laravel / FastAPI / NestJS / Express+TS / Golang"]
+    end
+    subgraph Storage["4. DATABASE"]
+        DB1[("Keycloak Database\nALWAYS PostgreSQL\n(one only, shared by every client)")]
+        DB2[("Application Database\nOracle / PostgreSQL / MySQL / etc.\n(free to differ per application)")]
+    end
+
+    FE -- "1. Redirect to login (OIDC)" --> KC
+    KC -- "2. Access Token / ID Token" --> FE
+    FE -- "3. Authorization: Bearer <token>" --> BE
+    BE -- "4. Validate token (JWKS)" --> KC
+    BE -- "5. Query business data" --> DB2
+    KC --> DB1
+```
+
+**What stays constant, regardless of stack:**
+1. The frontend never stores the user's password.
+2. Login always happens on Keycloak's own page (via redirect), never a custom-built form.
+3. The resulting token (JWT) follows a standard format — verifiable by a backend in any language or framework, because JWT and JWKS are open standards, not a Keycloak-specific format.
+4. The Keycloak database (`keycloak_db`) is always **separate** from the application database, and **only one is needed for every application and every platform** — see the full explanation in section 5.
+
+---
+
+## 2. Two Login Flow Patterns (Depending on Frontend Type)
+
+Before diving into the per-framework tables, it's important to understand: **there are two base patterns**, depending on whether the frontend has "its own server" (backend rendering / confidential client) or runs purely in the browser/device with no server (public client).
+
+### Pattern A — Confidential Client (frontend has a server: Next.js SSR, Laravel, .NET MVC/Blazor Server)
+
+```mermaid
+sequenceDiagram
+    participant U as User (Browser)
+    participant FE as Frontend Server (Next.js/Laravel/.NET)
+    participant KC as Keycloak
+    participant BE as Backend API
+    participant DB as Database
+
+    U->>FE: Click Login
+    FE-->>U: Redirect to Keycloak (Authorization Request)
+    U->>KC: Log in (enter username/password)
+    KC-->>U: Redirect back + Authorization Code
+    U->>FE: Send Code to Frontend Server
+    FE->>KC: Exchange Code + client_secret -> Token (back-channel)
+    KC-->>FE: Access Token + ID Token + Refresh Token
+    FE-->>U: Set its own session cookie (token stays on the server)
+    U->>FE: Request a page that needs data
+    FE->>BE: Authorization: Bearer <Access Token>
+    BE->>KC: Validate signature via JWKS
+    BE->>DB: Query data
+    BE-->>FE: Response data
+    FE-->>U: Render page
+```
+
+The token **never** reaches the browser in raw form — everything is kept on the frontend server. This is the safest pattern, and the one used in this project (Next.js Portal/Admin).
+
+### Pattern B — Public Client (frontend runs purely in the browser/device: SPA React/Vue with no SSR, Flutter, native mobile apps, static HTML+JS)
+
+```mermaid
+sequenceDiagram
+    participant U as User (Browser/App)
+    participant FE as Frontend (runs on the device, no server)
+    participant KC as Keycloak
+    participant BE as Backend API
+    participant DB as Database
+
+    U->>FE: Click Login
+    FE-->>U: Redirect to Keycloak + PKCE code_challenge (REQUIRED, no client_secret)
+    U->>KC: Log in
+    KC-->>U: Redirect back + Authorization Code
+    FE->>KC: Exchange Code + code_verifier (PKCE) -> Token
+    KC-->>FE: Access Token + ID Token (stored in memory/browser storage)
+    FE->>BE: Authorization: Bearer <Access Token>
+    BE->>KC: Validate signature via JWKS
+    BE->>DB: Query data
+    BE-->>FE: Response data
+```
+
+Since there's no server to safely hold a `client_secret`, the client is registered as a **Public Client**, and must use **PKCE** instead to secure the code exchange. The token here is **stored client-side** (JS memory, secure storage on mobile) — higher risk than Pattern A, requiring extra care (short token lifespan, never stored in plain `localStorage`).
+
+### Comparison Table — The Two Patterns
+
+| Aspect | Pattern A — Confidential (server-rendered) | Pattern B — Public (client-only) |
+|---|---|---|
+| Example frontends | Next.js (App Router server), Laravel Blade, .NET MVC/Blazor Server | Pure React/Vue SPA, Flutter, static HTML+JS, mobile apps |
+| Client Secret | Present, stored server-side | Absent (the client can't keep a secret) |
+| PKCE required? | Recommended (defense in depth) | **Required** |
+| Where the token lives | Frontend server (browser gets a session cookie; the real token is never sent) | Browser memory / device secure storage |
+| Token-leak risk level | Low | Higher — needs extra mitigation |
+| Keycloak Client Type | `Confidential` | `Public` |
+
+---
+
+## 3. Frontend Integration Table
+
+Every framework below fundamentally does the same thing: redirect to Keycloak, receive the code, exchange it for a token, and store the token safely according to what its platform allows.
+
+| Framework | Pattern (A/B) | Common Library/Approach | How the Token Is Stored |
+|---|---|---|---|
+| **Next.js** (App Router, server component) | A | Auth.js (NextAuth) with the Keycloak Provider, or `keycloak-js` for a pure SPA | Server-side, encrypted session JWT cookie (`HttpOnly`) |
+| **Laravel** | A | The `socialiteproviders/keycloak` package (built on Laravel Socialite), or an OIDC library such as `league/oauth2-client` | Server-side Laravel session (`storage/framework/sessions`), token never sent to the browser |
+| **.NET (ASP.NET Core MVC/Blazor Server)** | A | Built-in `Microsoft.AspNetCore.Authentication.OpenIdConnect` middleware, pointing `Authority` at the Keycloak realm URL | ASP.NET Core authentication cookie (`.AspNetCore.Cookies`), token held server-side in `AuthenticationProperties` |
+| **Vue.js (SPA, client-only, no SSR)** | B | `keycloak-js` (Keycloak's official adapter) or `oidc-client-ts` | Browser memory (`Keycloak.token` in the JS runtime), refreshed via a silent iframe |
+| **Vue.js (Nuxt SSR)** | A | `@sidebase/nuxt-auth` or an Auth.js equivalent for Nuxt | Server-side, similar to Next.js |
+| **Flutter (mobile/desktop app)** | B | The `openid_client` or `flutter_appauth` package, using a Custom Tab/WebView to open Keycloak's login page | OS secure storage (`flutter_secure_storage` — Keychain on iOS, Keystore on Android) |
+| **HTML + Vanilla JS (static, no framework)** | B | `keycloak-js` (official adapter, simply loaded via `<script>`) | Browser memory; optionally `sessionStorage` for a refresh token only if truly needed (avoid `localStorage` for tokens) |
+| **React SPA (Vite/CRA, no Next.js SSR)** | B | `keycloak-js` + `@react-keycloak/web`, or `oidc-client-ts` | Browser memory via a context/provider |
+
+**Important note for every Pattern B (client-only) case:** because the token lives client-side, use a **short-lived access token** (Realm Settings → Tokens → Access Token Lifespan) and rely on a **silent SSO check** (a hidden iframe to Keycloak) to refresh the token without ever exposing a refresh token to JavaScript.
+
+---
+
+## 4. Backend / API Integration Table
+
+Every backend does conceptually the same thing: receive `Authorization: Bearer <token>`, fetch the public key from Keycloak's **JWKS endpoint** (`/realms/<realm>/protocol/openid-connect/certs`), then validate **signature, issuer, and expiration** before processing the request.
+
+```mermaid
+flowchart LR
+    Req["Incoming request\nAuthorization: Bearer xxx"] --> Extract["Extract token from the header"]
+    Extract --> Fetch["Fetch the public key from\nKeycloak's JWKS endpoint\n(cached for a few minutes)"]
+    Fetch --> Verify{"Signature valid?\nIssuer matches?\nNot expired?"}
+    Verify -- No --> R401["401 Unauthorized"]
+    Verify -- Yes --> Next["Proceed with the request —\ntoken claims are now usable\n(sub, email, roles, etc.)"]
+```
+
+| Backend / Language | Common JWT Validation Library | How Keycloak Config Is Obtained |
+|---|---|---|
+| **Python (FastAPI)** | `python-jose[cryptography]`, or `fastapi-keycloak`, `Authlib` | Manually fetch JWKS from `KEYCLOAK_JWKS_URL`, or use the discovery document `/.well-known/openid-configuration` |
+| **Node.js / TypeScript (Express, generic)** | `jsonwebtoken` + `jwks-rsa` (automatically fetches the right key by `kid`) | `jwks-rsa` fetches automatically from the JWKS URI |
+| **NestJS** | `nestjs-keycloak-connect`, or `passport-jwt` + `jwks-rsa` as a custom `Strategy` inside `AuthModule` | Middleware/Guard attached at the route or global level |
+| **.NET (ASP.NET Core Web API)** | Built-in `Microsoft.AspNetCore.Authentication.JwtBearer` middleware — just set `Authority`, and the framework validates automatically | `Authority` + `Audience` in `appsettings.json`; .NET automatically fetches JWKS from the discovery document |
+| **Laravel (API, backend side only)** | The `laravel-keycloak-web-guard` package, or a custom middleware using `firebase/php-jwt` + a manual JWKS fetch | Guard/middleware validated on every request inside the `api` middleware group |
+| **Golang** | `github.com/coreos/go-oidc` (an official-style OIDC verifier) or `github.com/golang-jwt/jwt` + a manual JWKS fetch | `oidc.NewProvider(ctx, issuerURL)` automatically fetches the discovery document + JWKS |
+
+**The same principle applied in this project's FastAPI implementation holds universally**: never assume a token's claim structure (`aud`, `sub`, etc.) is identical across every Keycloak version — always **inspect a real token's actual contents** before writing validation logic, since different Keycloak versions can ship different defaults (a real example encountered while building this project: *lightweight access tokens* in Keycloak 26).
+
+---
+
+## 5. Database Integration Table
+
+There are **two databases that must be thought about separately**, and each follows a **different** rule:
+
+- **Keycloak's database** → **only one is needed, and it's always PostgreSQL** — shared by *every* realm, client, and application, regardless of that application's own platform.
+- **Application database** → free to choose, and may differ per application (Oracle/PostgreSQL/MySQL/etc.), because it has no relationship whatsoever to Keycloak's own database choice.
+
+```mermaid
+flowchart TB
+    subgraph Apps["Many applications, different platforms"]
+        A1["Laravel App"]
+        A2[".NET App"]
+        A3["Next.js App"]
+        A4["NestJS App"]
+    end
+    KC["One Keycloak"] --> KCDB[("ONE Keycloak Database\nALWAYS PostgreSQL")]
+    A1 -. "HTTP / OIDC only,\nnot a database connection" .-> KC
+    A2 -. "HTTP / OIDC only" .-> KC
+    A3 -. "HTTP / OIDC only" .-> KC
+    A4 -. "HTTP / OIDC only" .-> KC
+
+    A1 --> D1[("App 1 DB\nMySQL")]
+    A2 --> D2[("App 2 DB\nOracle")]
+    A3 --> D3[("App 3 DB\nPostgreSQL")]
+    A4 --> D4[("App 4 DB\nMongoDB")]
+
+    KCDB -.->|"NOT connected to\nany application database"| D1
+```
+
+### 5.1 Keycloak's Own Database — Only One, PostgreSQL
+
+**Why only one, and why PostgreSQL specifically:**
+
+- Keycloak's database **only stores IAM data** (realm, client, user, credential, session) — never any business data. Your applications **never** read from or write to this database directly; they only communicate with Keycloak over HTTP (OIDC/OAuth2), never through a database connection at all.
+- Because of that, **no matter how many applications you have, or what database platform each application uses, Keycloak's database only ever needs to be one.** Adding a new application means registering a new *client* in Keycloak — not creating a new Keycloak database.
+- Creating many instead (e.g. one Keycloak database per application) **defeats Keycloak's core purpose — SSO** — since each application would end up with its own isolated "identity center" that knows nothing about the others.
+- PostgreSQL is chosen as the fixed standard for Keycloak's database (rather than MySQL/Oracle) because it's the most widely used and community-recommended choice for Keycloak, and it's consistent with what was actually built and tested in this project.
+
+```ini
+# keycloak.conf — the only option used throughout this document
+db=postgres
+db-url=jdbc:postgresql://host:5432/keycloak_db
+```
+
+### 5.2 Application Database (Your Backend) — Free, Multi-Platform
+
+This is **entirely independent** of Keycloak's database choice — your backend is free to pick anything, because a backend only ever talks to Keycloak via JWT/JWKS (ordinary web protocols), never through a direct database connection.
+
+| Application Database | Commonly Chosen When |
+|---|---|
+| **PostgreSQL** | Modern applications needing strong JSON/JSONB support, open-source |
+| **MySQL/MariaDB** | Traditional web applications (often paired with Laravel/PHP) |
+| **Oracle** | Large enterprise environments already standardized on Oracle |
+
+**Real, industry-common combinations** — notice the **Keycloak DB column is always PostgreSQL**, while only the **Application DB** varies:
+
+| Combination | Frontend | Backend | Keycloak DB | Application DB |
+|---|---|---|---|---|
+| 1 (this project) | Next.js | FastAPI (Python) | PostgreSQL | PostgreSQL |
+| 2 | Laravel Blade | Laravel (PHP) | PostgreSQL | MySQL |
+| 3 | Vue.js SPA | NestJS (TypeScript) | PostgreSQL | MongoDB* |
+| 4 | .NET Blazor | .NET Web API | PostgreSQL | Oracle |
+| 5 | Flutter (mobile) | Golang | PostgreSQL | MySQL |
+
+All five of these combinations **can be served by one single Keycloak + one single Keycloak database (PostgreSQL)** — just register five different clients within the same realm; no need for five Keycloak databases.
+
+*Note: an application database doesn't have to be relational at all — MongoDB is equally valid, since again, the backend only ever needs to validate a JWT, not conform to any particular database type.
+
+---
+
+## 6. One Summary Diagram — "The Free Combination Matrix"
+
+```mermaid
+flowchart LR
+    subgraph FE["Pick ONE Frontend"]
+        F1[Next.js]
+        F2[Laravel]
+        F3[.NET]
+        F4[Vue.js]
+        F5[Flutter]
+        F6[HTML/CSS/JS]
+    end
+
+    subgraph KC["Always one: Keycloak + PostgreSQL"]
+        K[("Realm + Client + User\nOIDC / OAuth 2.0")]
+        KCDB[("Keycloak Database\nALWAYS PostgreSQL, one only")]
+        K --> KCDB
+    end
+
+    subgraph BE["Pick ONE Backend"]
+        B1[.NET]
+        B2[Laravel]
+        B3[Python/FastAPI]
+        B4[NestJS]
+        B5[TypeScript/Express]
+        B6[Golang]
+    end
+
+    subgraph DB["Pick ONE Application Database\n(free, per application)"]
+        D1[Oracle]
+        D2[PostgreSQL]
+        D3[MySQL]
+    end
+
+    F1 & F2 & F3 & F4 & F5 & F6 -.->|"OIDC login"| K
+    K -.->|"Bearer Token"| B1 & B2 & B3 & B4 & B5 & B6
+    B1 & B2 & B3 & B4 & B5 & B6 -.->|"query business data"| D1 & D2 & D3
+```
+
+**The key point of this diagram:** the Frontend, Backend, and Application Database boxes can be **freely combined however you like** — 6 × 6 × 3 = 108 valid combinations — because they're all connected through **one universal language**: the OIDC/OAuth 2.0 standard and the JWT format. Keycloak doesn't care what language or framework your application is written in, as long as it speaks that standard protocol.
+
+---
+
+## 7. Universal Design Principles Summary
+
+| Principle | Short Explanation |
+|---|---|
+| **One Keycloak, many clients** | No need to install a separate Keycloak per application — just register a new client per application within the same realm |
+| **One Keycloak database (PostgreSQL) for every application** | No matter how many applications exist, or what database platform each one uses, Keycloak's database stays one — a new application only means a new *client*, never a new Keycloak database |
+| **Choose Confidential when there's a server** | If the frontend has a server process (Next.js SSR, Laravel, .NET), always choose a confidential client and keep the token server-side |
+| **Choose Public + PKCE when there's no server** | Pure SPAs, Flutter, static HTML — PKCE is required since there's nowhere safe to keep a `client_secret` |
+| **A backend only needs to validate JWTs via JWKS** | No need to call Keycloak on every request (unless fresh data is needed) — verifying the signature against a cached public key is enough |
+| **Keycloak's database and the application database must stay separate** | Never mix Keycloak's tables with business tables — even the database engine itself may differ (Keycloak is always PostgreSQL; the application is free) |
+| **Inspect a real token before writing validation logic** | Never assume the claim structure (`aud`, `sub`, etc.) — different Keycloak versions can default differently, as directly encountered in this project |
+
+---
+
+## Related Reading
+
+See the other files in this project's `docs/` folder: `KEYCLOAK-GUIDE.md` (fundamentals), `DEMO-GUIDE.md` (how to run the demo), plus `phase-09-oidc-flow.md`, `phase-11-fastapi.md`, and `phase-19-security-review.md` for real, tested implementation details.
+</script>
+
+<script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.min.js"></script>
+<script>
+  const raw = document.getElementById('markdown-source').textContent;
+
+  // Extract mermaid code fences first so marked doesn't mangle them,
+  // render the rest as normal markdown, then re-insert mermaid blocks.
+  const mermaidBlocks = [];
+  const withPlaceholders = raw.replace(/```mermaid\n([\s\S]*?)```/g, (_, code) => {
+    const idx = mermaidBlocks.push(code.trim()) - 1;
+    return `\n<div class="mermaid-placeholder" data-idx="${idx}"></div>\n`;
+  });
+
+  marked.setOptions({ gfm: true, breaks: false });
+  const html = marked.parse(withPlaceholders);
+
+  const container = document.getElementById('content');
+  container.innerHTML = html;
+
+  container.querySelectorAll('.mermaid-placeholder').forEach(el => {
+    const idx = el.getAttribute('data-idx');
+    const div = document.createElement('div');
+    div.className = 'mermaid';
+    div.textContent = mermaidBlocks[idx];
+    el.replaceWith(div);
+  });
+
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'default',
+    securityLevel: 'loose',
+  });
+</script>
+</body>
+</html>

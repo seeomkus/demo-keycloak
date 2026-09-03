@@ -1,0 +1,23 @@
+# Secrets — never commit
+.env
+.env.local
+.env.*.local
+.env.secrets.local
+.env.tmp.*
+
+# Node.js
+node_modules/
+.next/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Keycloak runtime (installed outside project directory, but ignore if ever copied in)
+keycloak-*/
+
+# Service management scripts -- runtime log output (services run in
+# their own visible CMD windows; nothing else to ignore here)
+scripts/logs/
